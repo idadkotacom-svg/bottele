@@ -341,13 +341,11 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sched = get_scheduler()
         sheets = get_sheets()
         
-        # Get all videos from both platforms
-        yt_scheduled = sheets.get_scheduled_videos("all", platform="youtube")
-        yt_pending = sheets.get_pending_videos(platform="youtube")
-        fb_scheduled = sheets.get_scheduled_videos("all", platform="facebook")
-        fb_pending = sheets.get_pending_videos(platform="facebook")
+        # Get all scheduled and pending videos ONLY from YouTube
+        scheduled = sheets.get_scheduled_videos("all", platform="youtube")
+        pending = sheets.get_pending_videos(platform="youtube")
 
-        videos = yt_scheduled + yt_pending + fb_scheduled + fb_pending
+        videos = scheduled + pending
 
         if not videos:
             await update.message.reply_text("📭 Tidak ada video dalam antrian.")
@@ -360,8 +358,7 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [int(t.split(":")[0]) * 60 + int(t.split(":")[1]) for t in config.UPLOAD_SCHEDULE_HOURS]
         )
         
-        yt_summary = sheets.get_queue_summary(platform="youtube")
-        fb_summary = sheets.get_queue_summary(platform="facebook")
+        summary = sheets.get_queue_summary(platform="youtube")
         
         # Sort videos: pending first (FIFO), then scheduled by date
         def sort_key(v):
@@ -372,24 +369,17 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
         videos.sort(key=sort_key)
         
         # Setup counters for today's quota
-        yt_remaining = yt_summary['remaining_today']
-        fb_remaining = fb_summary['remaining_today']
-        yt_next_slot = 0
-        fb_next_slot = 0
+        remaining_today = summary['remaining_today']
+        next_slot_idx = 0
         
         for i, m in enumerate(schedule_minutes):
             if m > current_minutes:
-                yt_next_slot = i
-                fb_next_slot = i
+                next_slot_idx = i
                 break
                 
         msg = "📋 <b>Antrian Upload:</b>\n\n"
         
-        yt_i, fb_i = 0, 0
-        
         for i, v in enumerate(videos[:30]): # Show up to 30 items
-            platform_icon = "📺" if "youtube_link" in v else "📘"
-            platform = "youtube" if "youtube_link" in v else "facebook"
             status_icon = {
                 "pending": "⏳",
                 "scheduled": "📅",
@@ -404,40 +394,26 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Estimate time
             if v["status"] in ("pending", "scheduled"):
-                is_yt = platform == "youtube"
-                
-                # Get platform-specific limits
-                rem_today = yt_remaining if is_yt else fb_remaining
-                next_slot = yt_next_slot if is_yt else fb_next_slot
-                # The index within the platform queue
-                plat_i = yt_i if is_yt else fb_i
-                
-                if plat_i < rem_today:
+                if i < remaining_today:
                     # Uploads today
-                    slot_idx = (next_slot + plat_i) % len(schedule_minutes)
+                    slot_idx = (next_slot_idx + i) % len(schedule_minutes)
                     slot_min = schedule_minutes[slot_idx]
                     time_str = f"{slot_min // 60:02d}:{slot_min % 60:02d} WIB"
                     est = f" (Hari ini {time_str})"
                 else:
                     # Uploads tomorrow or later
-                    days_ahead = (plat_i - rem_today) // len(schedule_minutes) + 1
-                    slot_idx = (plat_i - rem_today) % len(schedule_minutes)
+                    days_ahead = (i - remaining_today) // len(schedule_minutes) + 1
+                    slot_idx = (i - remaining_today) % len(schedule_minutes)
                     slot_min = schedule_minutes[slot_idx]
                     time_str = f"{slot_min // 60:02d}:{slot_min % 60:02d} WIB"
                     if days_ahead == 1:
                         est = f" (Besok {time_str})"
                     else:
                         est = f" (H+{days_ahead} {time_str})"
-                        
-                # Increment the platform specific counter
-                if is_yt:
-                    yt_i += 1
-                else:
-                    fb_i += 1
             else:
                 est = ""
 
-            msg += f"{i+1}. {platform_icon} {status_icon} <code>{title}</code> → {ch}{est}\n"
+            msg += f"{i+1}. 📺 {status_icon} <code>{title}</code> → {ch}{est}\n"
 
         msg += f"\n📊 Total: {len(videos)} video"
         await update.message.reply_text(msg, parse_mode="HTML")
@@ -788,10 +764,22 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # Download using asyncio.to_thread to prevent blocking main thread
             def _download_video():
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info_dict = ydl.extract_info(url, download=True)
-                    download_path = ydl.prepare_filename(info_dict)
-                    return info_dict, download_path
+                attempts = 3
+                for attempt in range(1, attempts + 1):
+                    try:
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            info_dict = ydl.extract_info(url, download=True)
+                            download_path = ydl.prepare_filename(info_dict)
+                            return info_dict, download_path
+                    except Exception as e:
+                        if "ConnectionResetError" in str(e) or "Connection aborted" in str(e):
+                            logger.warning(f"Connection reset on attempt {attempt}, retrying...")
+                            # Fallback to IPv4 on retry to help avoid connection resets
+                            ydl_opts["source_address"] = "0.0.0.0"
+                            if attempt == attempts:
+                                raise e
+                        else:
+                            raise e
 
             info, local_path = await asyncio.to_thread(_download_video)
 
