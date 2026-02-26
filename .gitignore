@@ -7,3 +7,4 @@ __pycache__/
 temp/
 token.pickle
 youtube_token.json
+render_env_vars.txt

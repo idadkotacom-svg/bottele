@@ -107,34 +107,35 @@ def _get_active_channel(user_id: int) -> str:
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command."""
     msg = (
-        "🎬 **Video Upload Pipeline Bot**\n\n"
+        "🎬 <b>Video Upload Pipeline Bot</b>\n\n"
         "Kirim video ke saya dan saya akan:\n"
         "1. 📁 Upload ke Google Drive\n"
         "2. 🧠 Generate judul, deskripsi & tags via Groq AI\n"
-        "3. 📺 Upload ke YouTube (max 3/hari)\n\n"
-        "⏰ **Jadwal Upload (Viral Hours):**\n"
+        "3. 📺 Upload ke YouTube (max 6/hari)\n\n"
+        "⏰ <b>Jadwal Upload (Viral Hours):</b>\n"
         "• 21:00 WIB → 🇬🇧🇪🇺 Europe sore\n"
         "• 00:00 WIB → 🇺🇸 USA East siang\n"
         "• 03:00 WIB → 🇺🇸 USA West siang\n\n"
-        "**Commands:**\n"
+        "<b>Commands:</b>\n"
         "/status — Lihat status antrian & jadwal\n"
         "/queue — Lihat video dalam antrian\n"
         "/upload — Force upload sekarang\n"
+        "/channel — Pilih channel YouTube tujuan\n"
         "/help — Tampilkan pesan ini\n\n"
         "💡 Kirim video kapan saja, bot akan upload di jam viral!"
     )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /status command — show queue summary."""
     err = _google_not_configured()
     if err:
-        await update.message.reply_text(err, parse_mode="Markdown")
+        await update.message.reply_text(err, parse_mode="HTML")
         return
     try:
         msg = get_scheduler().get_status_message()
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await update.message.reply_text(msg, parse_mode="HTML")
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
 
@@ -148,14 +149,14 @@ async def cmd_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Show current channel and list
         active = _get_active_channel(user_id)
         channels_list = "\n".join(
-            f"  {'\u2705' if c == active else '\u25cb'} `{c}`"
+            f"  {'\u2705' if c == active else '\u25cb'} <code>{c}</code>"
             for c in config.YOUTUBE_CHANNELS
         )
         await update.message.reply_text(
-            f"📺 **Active channel:** `{active}`\n\n"
-            f"**Channels tersedia:**\n{channels_list}\n\n"
-            f"Gunakan: `/channel nama_channel`",
-            parse_mode="Markdown",
+            f"📺 <b>Active channel:</b> <code>{active}</code>\n\n"
+            f"<b>Channels tersedia:</b>\n{channels_list}\n\n"
+            f"Gunakan: <code>/channel nama_channel</code>",
+            parse_mode="HTML",
         )
         return
 
@@ -178,19 +179,19 @@ async def cmd_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     if matched is None:
-        channels_list = ", ".join(f"`{c}`" for c in config.YOUTUBE_CHANNELS)
+        channels_list = ", ".join(f"<code>{c}</code>" for c in config.YOUTUBE_CHANNELS)
         await update.message.reply_text(
-            f"❌ Channel `{target}` tidak ditemukan.\n"
+            f"❌ Channel <code>{target}</code> tidak ditemukan.\n"
             f"Channels tersedia: {channels_list}",
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
         return
 
     _user_channels[user_id] = matched
     await update.message.reply_text(
-        f"✅ Channel switched ke **{matched}**\n"
+        f"✅ Channel switched ke <b>{matched}</b>\n"
         f"Video berikutnya akan di-upload ke channel ini.",
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
 
 
@@ -198,7 +199,7 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /queue command — show today's scheduled uploads."""
     err = _google_not_configured()
     if err:
-        await update.message.reply_text(err, parse_mode="Markdown")
+        await update.message.reply_text(err, parse_mode="HTML")
         return
     try:
         sheets = get_sheets()
@@ -211,7 +212,7 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("📭 Tidak ada video dalam antrian.")
             return
 
-        msg = "📋 **Antrian Upload:**\n\n"
+        msg = "📋 <b>Antrian Upload:</b>\n\n"
         for i, v in enumerate(videos[:20], 1):
             status_icon = {
                 "pending": "⏳",
@@ -221,12 +222,13 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "failed": "❌",
             }.get(v["status"], "❓")
 
-            title = v.get("title") or v["filename"]
-            ch = v.get("channel", config.DEFAULT_CHANNEL)
-            msg += f"{i}. {status_icon} `{title}` \u2192 {ch}\n"
+            import html
+            title = html.escape(v.get("title") or v["filename"])
+            ch = html.escape(v.get("channel", config.DEFAULT_CHANNEL))
+            msg += f"{i}. {status_icon} <code>{title}</code> \u2192 {ch}\n"
 
         msg += f"\n📊 Total: {len(videos)} video"
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await update.message.reply_text(msg, parse_mode="HTML")
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
 
@@ -235,7 +237,7 @@ async def cmd_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /upload command — manually trigger queue processing."""
     err = _google_not_configured()
     if err:
-        await update.message.reply_text(err, parse_mode="Markdown")
+        await update.message.reply_text(err, parse_mode="HTML")
         return
     await update.message.reply_text("🔄 Force upload — mengabaikan jadwal...")
 
@@ -256,18 +258,22 @@ async def cmd_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         for r in results:
+            import html
+            fname = html.escape(r.get('filename', 'Unknown'))
             if r["success"]:
                 await update.message.reply_text(
-                    f"✅ **Uploaded!**\n"
-                    f"📹 `{r['filename']}`\n"
+                    f"✅ <b>Uploaded!</b>\n"
+                    f"📹 <code>{fname}</code>\n"
                     f"🔗 {r['youtube_link']}",
-                    parse_mode="Markdown",
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
                 )
             else:
+                err_msg = html.escape(r.get('error', 'Unknown'))
                 await update.message.reply_text(
-                    f"❌ **Failed:** `{r['filename']}`\n"
-                    f"Error: {r.get('error', 'Unknown')}",
-                    parse_mode="Markdown",
+                    f"❌ <b>Failed:</b> <code>{fname}</code>\n"
+                    f"Error: {err_msg}",
+                    parse_mode="HTML",
                 )
 
     except Exception as e:
@@ -528,7 +534,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if summary["remaining_today"] > 0:
             status_msg = (
-                f"📺 Video dijadwalkan upload di `{next_time}`\n"
+                f"📺 Video dijadwalkan upload di <code>{next_time}</code>\n"
                 f"Atau ketik /upload untuk force upload sekarang.\n"
                 f"📊 Sisa slot hari ini: {summary['remaining_today']}"
             )
@@ -538,14 +544,20 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Video dijadwalkan untuk besok."
             )
 
-        await message.reply_text(
-            f"✅ **Pipeline selesai!**\n\n"
-            f"📄 File: `{file_name}`\n"
-            f"📝 Title: {metadata['title']}\n"
-            f"🏷️ Tags: {metadata['tags']}\n\n"
+        # Step 5: Notify user via Telegram
+        import html
+        fname = html.escape(file_name)
+        title_esc = html.escape(metadata["title"])
+        tags_esc = html.escape(metadata["tags"])
+        
+        await update.message.reply_text(
+            f"✅ <b>Pipeline selesai!</b>\n\n"
+            f"📄 File: <code>{fname}</code>\n"
+            f"📝 Title: {title_esc}\n"
+            f"🏷️ Tags: {tags_esc}\n\n"
             f"{status_msg}\n\n"
             f"💡 Kamu bisa edit metadata di Google Sheets sebelum upload.",
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
 
     except Exception as e:
@@ -623,6 +635,32 @@ async def save_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f.write(f"\nTELEGRAM_CHAT_ID={chat_id}\n")
 
 
+# ─── Health Check Server (for Render) ──────────────────────────────
+
+
+def _start_health_server():
+    """Start a simple HTTP server for Render health checks."""
+    import threading
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    port = int(os.environ.get("PORT", "10000"))
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"YT Upload Bot is running!")
+
+        def log_message(self, format, *args):
+            pass  # Suppress HTTP logs
+
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info(f"Health check server running on port {port}")
+
+
 # ─── Main ──────────────────────────────────────────────────────────
 
 
@@ -631,6 +669,10 @@ def main():
     if not config.TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not set! Check your .env file.")
         return
+
+    # Start health check server (for Render)
+    if os.environ.get("RENDER"):
+        _start_health_server()
 
     logger.info("Starting Video Upload Pipeline Bot...")
 
