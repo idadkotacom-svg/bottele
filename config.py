@@ -71,6 +71,10 @@ def get_channel_token_file(channel_name: str) -> str:
     safe_name = channel_name.lower().replace(" ", "_")
     return str(CREDENTIALS_DIR / f"youtube_token_{safe_name}.json")
 
+# === Facebook ===
+FB_PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN", "")
+FB_PAGE_ID = os.getenv("FB_PAGE_ID", "")
+
 # === Scheduler ===
 MAX_UPLOADS_PER_DAY = int(os.getenv("MAX_UPLOADS_PER_DAY", "3"))
 SCHEDULER_INTERVAL_MINUTES = int(os.getenv("SCHEDULER_INTERVAL_MINUTES", "5"))

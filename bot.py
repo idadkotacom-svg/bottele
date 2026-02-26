@@ -131,17 +131,18 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Setelah dikirim, ini yang bot lakukan:\n"
         "1. ☁️ Backup video ke Google Drive\n"
         "2. 🧠 Groq AI membuat Judul, Deskripsi & Auto-Tags SEO\n"
-        "3. 📝 Dicatat di Google Sheets (Bisa kamu edit metadata-nya!)\n"
-        "4. 📅 Masuk antrian scheduler YouTube\n\n"
+        "3. 📝 Dicatat di Google Sheets (Sesuai Platform)\n"
+        "4. 📅 Masuk antrian scheduler\n\n"
         "<b>⏰ JADWAL VIRAL (Max 6x/hari):</b>\n"
         "• 21:00 WIB → 🇬🇧🇪🇺 Europe sore\n"
         "• 00:00 WIB → 🇺🇸 USA East siang\n"
         "• 03:00 WIB → 🇺🇸 USA West siang\n\n"
         "<b>🛠️ COMMANDS:</b>\n"
+        "/platform — Ganti target upload (YouTube / Facebook)\n"
         "/queue — Cek antrian & estimasi jam upload\n"
         "/status — Ringkasan quota harian\n"
         "/upload — Bypass jadwal & upload paksa 1 video sekarang\n"
-        "/channel — Menu pindah channel\n"
+        "/channel — Menu pindah channel (Khusus YouTube)\n"
         "/ask — Brainstorming ide dengan Groq AI & otomatis save ke Sheets\n"
     )
     await update.message.reply_text(
@@ -231,6 +232,49 @@ async def ask_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await query.message.reply_text(f"❌ Gagal menyimpan ide: {e}")
 
+
+# Per-user active platform ("youtube" or "facebook")
+_user_platforms: dict[int, str] = {}
+
+def _get_active_platform(user_id: int) -> str:
+    """Get the active platform for a user. Default is youtube."""
+    return _user_platforms.get(user_id, "youtube")
+
+async def cmd_platform(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /platform command — switch active target (youtube vs facebook)."""
+    user_id = update.effective_user.id
+    args = context.args
+
+    if not args:
+        active = _get_active_platform(user_id)
+        platforms = ["youtube", "facebook"]
+        platform_list = "\n".join(
+            f"  {'\u2705' if p == active else '\u25cb'} <code>{p}</code>"
+            for p in platforms
+        )
+        await update.message.reply_text(
+            f"🎯 <b>Active Platform:</b> <code>{active}</code>\n\n"
+            f"<b>Platform tersedia:</b>\n{platform_list}\n\n"
+            f"Gunakan: <code>/platform [nama]</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    new_platform = args[0].lower()
+    if new_platform not in ["youtube", "facebook"]:
+        await update.message.reply_text(
+            f"❌ Platform tidak dikenal: <code>{new_platform}</code>\n"
+            "Gunakan 'youtube' atau 'facebook'.",
+            parse_mode="HTML"
+        )
+        return
+
+    _user_platforms[user_id] = new_platform
+    await update.message.reply_text(
+        f"✅ <b>Platform berhasil diubah!</b>\n"
+        f"Target upload sekarang: <code>{new_platform}</code>",
+        parse_mode="HTML"
+    )
 
 async def cmd_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /channel command — switch active YouTube channel."""
@@ -375,7 +419,9 @@ async def cmd_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 Force upload — mengabaikan jadwal...")
 
     try:
-        results = get_scheduler().force_upload()
+        # Uploading to YouTube is a blocking network operation
+        # Run it in a background thread so the bot stays responsive
+        results = await asyncio.to_thread(get_scheduler().force_upload)
 
         if not results:
             summary = get_sheets().get_queue_summary()
@@ -412,6 +458,74 @@ async def cmd_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
 
+async def cmd_extract(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /extract command — scrape video links from a channel or playlist."""
+    if not context.args:
+        await update.message.reply_text(
+            "❓ <b>Cara Penggunaan:</b>\n"
+            "<code>/extract [Link YouTube Channel/Playlist]</code>\n\n"
+            "Contoh:\n"
+            "<code>/extract https://www.youtube.com/@IdeaClips2/shorts</code>\n"
+            "(Maksimal 50 video terbaru akan diambil untuk mencegah spam)",
+            parse_mode="HTML"
+        )
+        return
+
+    url = context.args[0]
+    wait_msg = await update.message.reply_text("🔍 <i>Sedang memindai channel/playlist...</i>", parse_mode="HTML")
+
+    def _scrape_urls():
+        import yt_dlp
+        opts = {
+            "extract_flat": True,          # Don't download, just extract info
+            "playlist_items": "1-50",      # Limit to 50 items to avoid timeouts
+            "quiet": True,
+            "no_warnings": True,
+            "extractor_args": {"youtube": ["skip=dash,hls"]}
+        }
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            return ydl.extract_info(url, download=False)
+
+    try:
+        # Run blocking yt-dlp extraction in background thread
+        info = await asyncio.to_thread(_scrape_urls)
+        
+        if not info or "entries" not in info:
+            await wait_msg.edit_text("❌ Gagal menemukan daftar video di link tersebut.")
+            return
+            
+        entries = list(info["entries"])
+        if not entries:
+            await wait_msg.edit_text("📭 Channel/playlist kosong atau tidak bisa diakses.")
+            return
+
+        urls = []
+        for entry in entries:
+            # For YouTube, url is often just the ID, so we construct the full link
+            base_url = entry.get("url") or entry.get("webpage_url") or entry.get("id")
+            if base_url:
+                if not base_url.startswith("http"):
+                    base_url = f"https://www.youtube.com/watch?v={base_url}"
+                urls.append(base_url)
+
+        if not urls:
+            await wait_msg.edit_text("❌ Tidak ada link valid yang bisa diekstrak.")
+            return
+
+        # Send back in chunks to avoid Telegram message length limits
+        chunk_size = 20
+        await wait_msg.edit_text(f"✅ Berhasil menemukan <b>{len(urls)}</b> video!\n\nSilakan copy-paste link di bawah ini ke bot:", parse_mode="HTML")
+        
+        for i in range(0, len(urls), chunk_size):
+            chunk = urls[i:i + chunk_size]
+            msg_text = "\n".join(chunk)
+            # Add small delay between messages to not trigger spam blocks
+            await asyncio.sleep(0.5)
+            await update.message.reply_text(msg_text, disable_web_page_preview=True)
+
+    except Exception as e:
+        logger.error(f"Error in /extract: {e}")
+        await wait_msg.edit_text(f"❌ Error saat mengekstrak: {str(e)[:200]}")
 
 # ─── Video/File Handler ────────────────────────────────────────────
 
@@ -476,12 +590,16 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # Step 3: Add to Google Sheets
-        active_ch = _get_active_channel(update.effective_user.id)
+        user_id = update.effective_user.id
+        active_ch = _get_active_channel(user_id)
+        active_platform = _get_active_platform(user_id)
+        
         sheets = get_sheets()
         row = sheets.add_video(
             filename=file_name,
             drive_link=drive_result["web_view_link"],
             channel=active_ch,
+            platform=active_platform
         )
 
         # Step 4: Generate metadata via Groq
@@ -493,6 +611,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             metadata["title"],
             metadata["description"],
             metadata["tags"],
+            platform=active_platform
         )
 
         # Step 5: Clean up temp file
@@ -500,10 +619,10 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(local_path)
 
         # Step 6: Check if we can upload now or need to schedule
-        summary = sheets.get_queue_summary()
+        summary = sheets.get_queue_summary(platform=active_platform)
         if summary["remaining_today"] > 0:
             status_msg = (
-                f"📺 Video siap upload ke YouTube!\n"
+                f"📺 Video siap upload ke {active_platform.title()}!\n"
                 f"Ketik /upload untuk upload sekarang.\n"
                 f"📊 Sisa slot hari ini: {summary['remaining_today']}"
             )
@@ -675,16 +794,21 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🧠 Generating metadata via Groq AI...",
             )
 
-            active_ch = _get_active_channel(update.effective_user.id)
+            user_id = update.effective_user.id
+            active_ch = _get_active_channel(user_id)
+            active_platform = _get_active_platform(user_id)
+            
             sheets = get_sheets()
             row = sheets.add_video(
                 filename=file_name,
                 drive_link=drive_result["web_view_link"],
                 channel=active_ch,
+                platform=active_platform
             )
 
             # Form rich context for Groq AI to avoid hallucination
             context_parts = [f"Original title: {video_title}"]
+            extra = message.caption or ""
             if extra:
                 context_parts.append(f"User caption: {extra}")
             if video_desc:
@@ -706,6 +830,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 metadata["title"],
                 metadata["description"],
                 metadata["tags"],
+                platform=active_platform
             )
 
             # Clean up temp
@@ -716,13 +841,13 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
             # Status
-            summary = sheets.get_queue_summary()
+            summary = sheets.get_queue_summary(platform=active_platform)
             sched = get_scheduler()
             next_time = sched.get_next_upload_time()
 
             if summary["remaining_today"] > 0:
                 status_msg = (
-                    f"📺 Video dijadwalkan upload di <code>{next_time}</code>\n"
+                    f"📺 Video dijadwalkan upload ke <b>{active_platform.title()}</b> di <code>{next_time}</code>\n"
                     f"Atau ketik /upload untuk force upload sekarang.\n"
                     f"📊 Sisa slot hari ini: {summary['remaining_today']}"
                 )
@@ -764,7 +889,8 @@ async def scheduled_upload_job(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Running scheduled upload job...")
 
     try:
-        results = get_scheduler().process_queue()
+        # Run YouTube upload in a background thread to prevent blocking the scheduler/bot
+        results = await asyncio.to_thread(get_scheduler().process_queue)
 
         chat_id = config.TELEGRAM_CHAT_ID
         if not chat_id:
@@ -874,7 +1000,9 @@ def main():
     app.add_handler(CommandHandler("queue", cmd_queue))
     app.add_handler(CommandHandler("upload", cmd_upload))
     app.add_handler(CommandHandler("channel", cmd_channel))
+    app.add_handler(CommandHandler("platform", cmd_platform))
     app.add_handler(CommandHandler("ask", cmd_ask))
+    app.add_handler(CommandHandler("extract", cmd_extract))
     app.add_handler(CallbackQueryHandler(ask_callback, pattern="^save_idea$"))
 
     # Video / file handler
@@ -907,6 +1035,10 @@ def main():
         logger.info(
             f"Scheduler enabled: every {config.SCHEDULER_INTERVAL_MINUTES} minutes"
         )
+
+    logger.info("Starting keep-alive web server for Render...")
+    import keep_alive
+    keep_alive.keep_alive()
 
     logger.info("Bot is running! Press Ctrl+C to stop.")
     app.run_polling(drop_pending_updates=True)

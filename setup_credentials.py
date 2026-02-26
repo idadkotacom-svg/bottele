@@ -25,7 +25,7 @@ CREDENTIAL_FILES = {
 def _get_channel_token_vars():
     """Discover YouTube token env vars dynamically."""
     extras = {}
-    for key, val in os.environ.items():
+    for key in os.environ:
         if key.startswith("YOUTUBE_TOKEN_") and key.endswith("_B64"):
             # YOUTUBE_TOKEN_DEFAULT_B64 -> youtube_token_default.json
             name = key[len("YOUTUBE_TOKEN_"):-len("_B64")].lower()
@@ -97,7 +97,7 @@ def encode_credentials():
     output_file = Path(__file__).parent / "render_env_vars.txt"
     if output_file.exists():
         print(f"\n✅ All values saved to: {output_file}")
-        print("   Copy each line as an env var in Render Dashboard.")
+        print("   Copy each line as an env var in Render Dashboard, or upload render_env_vars.txt as a Secret File mounted to /etc/secrets/render_env_vars.txt")
 
 
 if __name__ == "__main__":

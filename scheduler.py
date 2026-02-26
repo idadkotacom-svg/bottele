@@ -12,6 +12,7 @@ import config
 from sheets_manager import SheetsManager
 from drive_uploader import DriveUploader
 from youtube_uploader import YouTubeUploader
+from facebook_uploader import FacebookUploader
 from groq_metadata import generate_metadata
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class Scheduler:
         self.sheets = SheetsManager()
         self.drive = DriveUploader()
         self._youtube_cache = {}  # channel_name -> YouTubeUploader
+        self._facebook_uploader = FacebookUploader()
         self.temp_dir = config.TEMP_DIR
 
     def _get_youtube(self, channel_name: str = None) -> YouTubeUploader:
@@ -34,6 +36,10 @@ class Scheduler:
         if channel not in self._youtube_cache:
             self._youtube_cache[channel] = YouTubeUploader(channel)
         return self._youtube_cache[channel]
+        
+    def _get_facebook(self) -> FacebookUploader:
+        """Get the Facebook Uploader instance."""
+        return self._facebook_uploader
 
     def is_upload_time(self) -> bool:
         """
@@ -85,101 +91,91 @@ class Scheduler:
 
     def process_queue(self) -> list[dict]:
         """
-        Process the upload queue. Only uploads if:
+        Process the upload queue for both platforms. Only uploads if:
         1. Current time is within a scheduled window
-        2. Daily limit not reached
+        2. Daily limit not reached per platform
         3. There are pending videos
-
-        Returns:
-            List of results for each processed video.
         """
-        today = datetime.now(WIB).strftime("%Y-%m-%d")
-        tomorrow = (datetime.now(WIB) + timedelta(days=1)).strftime("%Y-%m-%d")
-
-        uploads_today = self.sheets.count_uploads_today()
-        remaining = config.MAX_UPLOADS_PER_DAY - uploads_today
-
-        logger.info(
-            f"Queue check — Uploads today: {uploads_today}/"
-            f"{config.MAX_UPLOADS_PER_DAY}, Remaining: {remaining}"
-        )
-
-        if remaining <= 0:
-            logger.info("Daily upload limit reached.")
-            self._schedule_remaining(tomorrow)
-            return []
-
-        # Check if now is a scheduled upload time
         if not self.is_upload_time():
             next_time = self.get_next_upload_time()
             logger.info(f"Not upload time yet. Next: {next_time}")
             return []
 
-        # Get videos to process (scheduled for today first, then pending)
-        scheduled = self.sheets.get_scheduled_videos(today)
-        pending = self.sheets.get_pending_videos()
-        to_process = scheduled + pending
-
-        if not to_process:
-            logger.info("No videos to process.")
-            return []
-
-        # Upload only 1 video per scheduled time slot
-        video = to_process[0]
-        result = self._process_single(video)
-        results = [result]
-
-        if result.get("success"):
-            remaining -= 1
-
-        # Schedule remaining if limit reached
-        if remaining <= 0:
-            self._schedule_remaining(tomorrow)
-
+        results = []
+        for platform in ["youtube", "facebook"]:
+            res = self._process_platform_queue(platform)
+            results.extend(res)
+            
         return results
 
     def force_upload(self) -> list[dict]:
         """
         Force process queue regardless of schedule (for /upload command).
-        Respects daily limit only.
+        Respects daily limit.
         """
+        results = []
+        for platform in ["youtube", "facebook"]:
+            res = self._process_platform_queue(platform, force=True)
+            results.extend(res)
+            
+        return results
+
+    def _process_platform_queue(self, platform: str, force: bool = False) -> list[dict]:
+        """Process the upload queue for a specific platform."""
         today = datetime.now(WIB).strftime("%Y-%m-%d")
         tomorrow = (datetime.now(WIB) + timedelta(days=1)).strftime("%Y-%m-%d")
 
-        uploads_today = self.sheets.count_uploads_today()
+        uploads_today = self.sheets.count_uploads_today(platform=platform)
         remaining = config.MAX_UPLOADS_PER_DAY - uploads_today
 
+        logger.info(
+            f"Queue check {platform} — Uploads today: {uploads_today}/"
+            f"{config.MAX_UPLOADS_PER_DAY}, Remaining: {remaining}"
+        )
+
         if remaining <= 0:
-            self._schedule_remaining(tomorrow)
+            logger.info(f"Daily upload limit reached for {platform}.")
+            self._schedule_remaining(tomorrow, platform)
             return []
 
-        scheduled = self.sheets.get_scheduled_videos(today)
-        pending = self.sheets.get_pending_videos()
+        # Get videos to process (scheduled for today first, then pending)
+        scheduled = self.sheets.get_scheduled_videos(today, platform=platform)
+        pending = self.sheets.get_pending_videos(platform=platform)
         to_process = scheduled + pending
 
+        if not to_process:
+            logger.info(f"No videos to process for {platform}.")
+            return []
+
         results = []
-        for video in to_process[:remaining]:
-            result = self._process_single(video)
+        
+        # If forced, try to process all remaining slots.
+        # If scheduled time, only process 1 video per slot.
+        limit = remaining if force else 1
+        
+        for video in to_process[:limit]:
+            result = self._process_single(video, platform)
             results.append(result)
             if result.get("success"):
                 remaining -= 1
                 if remaining <= 0:
                     break
 
+        # Schedule remaining if limit reached
         if remaining <= 0:
-            self._schedule_remaining(tomorrow)
+            self._schedule_remaining(tomorrow, platform)
 
         return results
 
-    def _process_single(self, video: dict) -> dict:
+    def _process_single(self, video: dict, platform: str) -> dict:
         """
         Process a single video: generate metadata if missing,
-        download from Drive, upload to YouTube.
+        download from Drive, upload to platform.
         """
         row = video["row"]
         filename = video["filename"]
 
-        logger.info(f"Processing row {row}: '{filename}'")
+        logger.info(f"Processing row {row} on {platform}: '{filename}'")
 
         try:
             # Step 1: Generate metadata if title is empty
@@ -191,6 +187,7 @@ class Scheduler:
                     metadata["title"],
                     metadata["description"],
                     metadata["tags"],
+                    platform=platform
                 )
                 video.update(metadata)
 
@@ -205,20 +202,34 @@ class Scheduler:
             logger.info(f"Downloading from Drive: {file_id}")
             self.drive.download(file_id, local_path)
 
-            # Step 3: Upload to YouTube (using channel from video data)
+            # Step 3: Upload to platform
             channel = video.get("channel", config.DEFAULT_CHANNEL)
-            self.sheets.update_status(row, "uploading")
+            self.sheets.update_status(row, "uploading", platform=platform)
 
-            yt = self._get_youtube(channel)
-            result = yt.upload(
-                file_path=local_path,
-                title=video["title"],
-                description=video.get("description", ""),
-                tags=video.get("tags", ""),
-            )
+            video_link = ""
 
-            # Step 4: Update sheet with YouTube link
-            self.sheets.set_youtube_link(row, result["youtube_link"])
+            if platform == "youtube":
+                yt = self._get_youtube(channel)
+                result = yt.upload(
+                    file_path=local_path,
+                    title=video["title"],
+                    description=video.get("description", ""),
+                    tags=video.get("tags", ""),
+                )
+                video_link = result["youtube_link"]
+            elif platform == "facebook":
+                fb = self._get_facebook()
+                desc = f"{video['title']}\n\n{video.get('description', '')}"
+                result = fb.upload_reel(
+                    file_path=local_path,
+                    description=desc
+                )
+                if not result["success"]:
+                    raise Exception(f"Facebook Graph API Error: {result.get('error')}")
+                video_link = result["url"]
+
+            # Step 4: Update sheet with link
+            self.sheets.set_youtube_link(row, video_link, platform=platform)
 
             # Step 5: Clean up temp file
             try:
@@ -232,12 +243,12 @@ class Scheduler:
                 "success": True,
                 "row": row,
                 "filename": filename,
-                "youtube_link": result["youtube_link"],
+                "youtube_link": video_link,
             }
 
         except Exception as e:
             logger.error(f"Failed to process row {row}: {e}")
-            self.sheets.update_status(row, "failed")
+            self.sheets.update_status(row, "failed", platform=platform)
             return {
                 "success": False,
                 "row": row,
@@ -245,13 +256,13 @@ class Scheduler:
                 "error": str(e),
             }
 
-    def _schedule_remaining(self, date_str: str):
+    def _schedule_remaining(self, date_str: str, platform: str):
         """Schedule all remaining pending videos for a future date."""
-        pending = self.sheets.get_pending_videos()
+        pending = self.sheets.get_pending_videos(platform=platform)
         for video in pending:
-            self.sheets.set_scheduled_date(video["row"], date_str)
+            self.sheets.set_scheduled_date(video["row"], date_str, platform=platform)
             logger.info(
-                f"Scheduled '{video['filename']}' for {date_str}"
+                f"Scheduled '{video['filename']}' for {date_str} on {platform}"
             )
 
     @staticmethod
@@ -272,7 +283,9 @@ class Scheduler:
 
     def get_status_message(self) -> str:
         """Generate a human-readable status message."""
-        summary = self.sheets.get_queue_summary()
+        yt_summary = self.sheets.get_queue_summary(platform="youtube")
+        fb_summary = self.sheets.get_queue_summary(platform="facebook")
+        
         next_time = self.get_next_upload_time()
         is_upload = self.is_upload_time()
 
@@ -281,13 +294,12 @@ class Scheduler:
 
         msg = (
             "📊 **Upload Queue Status**\n\n"
-            f"📹 Total videos: {summary['total']}\n"
-            f"⏳ Pending: {summary['pending']}\n"
-            f"📅 Scheduled: {summary['scheduled']}\n"
-            f"✅ Uploaded: {summary['uploaded']}\n"
-            f"❌ Failed: {summary['failed']}\n\n"
-            f"📤 Uploads today: {summary['uploads_today']}/{config.MAX_UPLOADS_PER_DAY}\n"
-            f"🔄 Remaining today: {summary['remaining_today']}\n\n"
+            f"📺 <b>YouTube</b>:\n"
+            f"📹 Total: {yt_summary['total']} | ⏳ Pending: {yt_summary['pending']} | 📅 Scheduled: {yt_summary['scheduled']}\n"
+            f"📤 Uploads today: {yt_summary['uploads_today']}/{config.MAX_UPLOADS_PER_DAY}\n\n"
+            f"📘 <b>Facebook</b>:\n"
+            f"📹 Total: {fb_summary['total']} | ⏳ Pending: {fb_summary['pending']} | 📅 Scheduled: {fb_summary['scheduled']}\n"
+            f"📤 Uploads today: {fb_summary['uploads_today']}/{config.MAX_UPLOADS_PER_DAY}\n\n"
             f"🕐 Schedule: `{schedule_str}` WIB\n"
             f"⏰ Now: {now_str}\n"
             f"⏭️ Next upload: {next_time}\n"
