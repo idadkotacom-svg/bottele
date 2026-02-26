@@ -51,12 +51,19 @@ class YouTubeUploader:
             else:
                 logger.info(
                     f"Starting YouTube OAuth2 flow for '{self.channel_name}'...\n"
-                    f"Please check the terminal and open the link to login with the Google account for channel: {self.channel_name}"
                 )
                 flow = InstalledAppFlow.from_client_secrets_file(
                     config.YOUTUBE_CLIENT_SECRETS_FILE, SCOPES
                 )
-                creds = flow.run_local_server(port=0, open_browser=False)
+                
+                # Check if running on Render (headless server)
+                if os.environ.get("RENDER"):
+                    logger.info("Detected Render environment — using OOB (Console) OAuth flow.")
+                    # Use run_console to print the URL and ask for the authorization code
+                    creds = flow.run_console()
+                else:
+                    logger.info("Detected Local environment — using Local Server OAuth flow.")
+                    creds = flow.run_local_server(port=0, open_browser=False)
 
             # Save token for future use
             with open(self.token_file, "w") as f:
