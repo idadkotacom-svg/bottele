@@ -600,7 +600,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # yt-dlp options: best quality, mp4 format, bypass Android client
             ydl_opts = {
-                'format': 'bestvideo+bestaudio/best',
+                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                 'merge_output_format': 'mp4',
                 'outtmpl': str(config.TEMP_DIR / '%(title)s.%(ext)s'),
                 'quiet': True,
@@ -610,8 +610,15 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     'youtube': [
                         'player_client=android,ios',
                         'player_skip=configs,webpage'
+                    ],
+                    'tiktok': [
+                        'app_version=32.1.3',
+                        'manifest_app_version=32.1.3'
                     ]
                 },
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                }
             }
 
             # Check for cookies file to bypass YouTube's datacenter block
