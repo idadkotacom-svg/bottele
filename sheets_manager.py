@@ -316,8 +316,11 @@ class SheetsManager:
                     summary[status] += 1
 
         summary["uploads_today"] = self.count_uploads_today(platform=platform)
+        
+        max_uploads = config.MAX_UPLOADS_PER_DAY_FACEBOOK if platform == "facebook" else config.MAX_UPLOADS_PER_DAY_YOUTUBE
+        
         summary["remaining_today"] = max(
-            0, config.MAX_UPLOADS_PER_DAY - summary["uploads_today"]
+            0, max_uploads - summary["uploads_today"]
         )
 
         return summary
