@@ -404,26 +404,40 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Estimate time
             if v["status"] in ("pending", "scheduled"):
-                if i < remaining_today:
+                is_yt = platform == "youtube"
+                
+                # Get platform-specific limits
+                rem_today = yt_remaining if is_yt else fb_remaining
+                next_slot = yt_next_slot if is_yt else fb_next_slot
+                # The index within the platform queue
+                plat_i = yt_i if is_yt else fb_i
+                
+                if plat_i < rem_today:
                     # Uploads today
-                    slot_idx = (next_slot_idx + i) % len(schedule_minutes)
+                    slot_idx = (next_slot + plat_i) % len(schedule_minutes)
                     slot_min = schedule_minutes[slot_idx]
                     time_str = f"{slot_min // 60:02d}:{slot_min % 60:02d} WIB"
                     est = f" (Hari ini {time_str})"
                 else:
                     # Uploads tomorrow or later
-                    days_ahead = (i - remaining_today) // len(schedule_minutes) + 1
-                    slot_idx = (i - remaining_today) % len(schedule_minutes)
+                    days_ahead = (plat_i - rem_today) // len(schedule_minutes) + 1
+                    slot_idx = (plat_i - rem_today) % len(schedule_minutes)
                     slot_min = schedule_minutes[slot_idx]
                     time_str = f"{slot_min // 60:02d}:{slot_min % 60:02d} WIB"
                     if days_ahead == 1:
                         est = f" (Besok {time_str})"
                     else:
                         est = f" (H+{days_ahead} {time_str})"
+                        
+                # Increment the platform specific counter
+                if is_yt:
+                    yt_i += 1
+                else:
+                    fb_i += 1
             else:
                 est = ""
 
-            msg += f"{i+1}. {status_icon} <code>{title}</code> \u2192 {ch}{est}\n"
+            msg += f"{i+1}. {platform_icon} {status_icon} <code>{title}</code> → {ch}{est}\n"
 
         msg += f"\n📊 Total: {len(videos)} video"
         await update.message.reply_text(msg, parse_mode="HTML")
