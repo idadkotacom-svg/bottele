@@ -21,7 +21,7 @@ def generate_metadata(filename: str, extra_context: str = "") -> dict:
         extra_context: Optional additional context from the user.
 
     Returns:
-        dict with keys: title(title must contain one or two viral tag and theme video), description, tags
+        dict with keys: title(title must contain one or two viral tag and theme video), description(description must contain one or two viral tag and theme video), tags(sebanyak mungkin tags must contain one or two viral tag and theme video)
     """
     client = Groq(api_key=config.GROQ_API_KEY)
 
@@ -79,3 +79,34 @@ def generate_metadata(filename: str, extra_context: str = "") -> dict:
             "description": f"Video: {filename}",
             "tags": "video",
         }
+
+
+def ask_groq(prompt: str) -> str:
+    """
+    Send a custom prompt to Groq for brainstorming or general queries.
+    
+    Args:
+        prompt: The user's prompt.
+        
+    Returns:
+        The generated text response.
+    """
+    client = Groq(api_key=config.GROQ_API_KEY)
+    
+    try:
+        response = client.chat.completions.create(
+            model=config.GROQ_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a creative YouTube strategist and assistant. Give actionable, concise, and structured advice, ideas, or scripts.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.8,
+            max_tokens=1024,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"Groq ask error: {e}")
+        return f"❌ Maaf, Groq API sedang error: {e}"

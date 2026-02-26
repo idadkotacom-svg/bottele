@@ -12,18 +12,22 @@ Send a video or file to the bot to add it to the pipeline.
 import asyncio
 import logging
 import os
+import tempfile
 import re
+from datetime import datetime
 from pathlib import Path
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    CallbackQueryHandler,
     ContextTypes,
     MessageHandler,
     filters,
 )
 
+from config import WIB
 import config
 
 # Logging setup
@@ -106,25 +110,45 @@ def _get_active_channel(user_id: int) -> str:
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command."""
+    user_id = update.effective_user.id
+    active_ch = _get_active_channel(user_id)
+    channels_list = ", ".join(f"<code>{c}</code>" for c in config.YOUTUBE_CHANNELS)
+
     msg = (
-        "🎬 <b>Video Upload Pipeline Bot</b>\n\n"
-        "Kirim video ke saya dan saya akan:\n"
-        "1. 📁 Upload ke Google Drive\n"
-        "2. 🧠 Generate judul, deskripsi & tags via Groq AI\n"
-        "3. 📺 Upload ke YouTube (max 6/hari)\n\n"
-        "⏰ <b>Jadwal Upload (Viral Hours):</b>\n"
+        "🎬 <b>Auto YouTube Uploader Bot</b> 🚀\n\n"
+        "<b>📺 INFO CHANNEL:</b>\n"
+        f"• Aktif saat ini: <code>{active_ch}</code>\n"
+        f"• Tersedia: {channels_list}\n"
+        "<i>(Ganti tujuan pakai /channel nama_channel sebelum kirim video)</i>\n\n"
+        "<b>📥 CARA UPLOAD (Pilih salah satu):</b>\n"
+        "1. <b>Kirim File Video</b> langsung ke chat ini (.mp4, .mov, dll)\n"
+        "2. <b>Kirim Link Sosmed!</b> Bot akan otomatis download tanpa watermark dari:\n"
+        "   👉 YouTube (Shorts/Video normal)\n"
+        "   👉 TikTok\n"
+        "   👉 Instagram (Reels)\n"
+        "   👉 X / Twitter\n\n"
+        "<b>⚙️ OTOMATISASI PIPELINE:</b>\n"
+        "Setelah dikirim, ini yang bot lakukan:\n"
+        "1. ☁️ Backup video ke Google Drive\n"
+        "2. 🧠 Groq AI membuat Judul, Deskripsi & Auto-Tags SEO\n"
+        "3. 📝 Dicatat di Google Sheets (Bisa kamu edit metadata-nya!)\n"
+        "4. 📅 Masuk antrian scheduler YouTube\n\n"
+        "<b>⏰ JADWAL VIRAL (Max 6x/hari):</b>\n"
         "• 21:00 WIB → 🇬🇧🇪🇺 Europe sore\n"
         "• 00:00 WIB → 🇺🇸 USA East siang\n"
         "• 03:00 WIB → 🇺🇸 USA West siang\n\n"
-        "<b>Commands:</b>\n"
-        "/status — Lihat status antrian & jadwal\n"
-        "/queue — Lihat video dalam antrian\n"
-        "/upload — Force upload sekarang\n"
-        "/channel — Pilih channel YouTube tujuan\n"
-        "/help — Tampilkan pesan ini\n\n"
-        "💡 Kirim video kapan saja, bot akan upload di jam viral!"
+        "<b>🛠️ COMMANDS:</b>\n"
+        "/queue — Cek antrian & estimasi jam upload\n"
+        "/status — Ringkasan quota harian\n"
+        "/upload — Bypass jadwal & upload paksa 1 video sekarang\n"
+        "/channel — Menu pindah channel\n"
+        "/ask — Brainstorming ide dengan Groq AI & otomatis save ke Sheets\n"
     )
-    await update.message.reply_text(msg, parse_mode="HTML")
+    await update.message.reply_text(
+        msg, 
+        parse_mode="HTML", 
+        disable_web_page_preview=True
+    )
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -138,6 +162,74 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode="HTML")
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def cmd_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /ask command to brainstorm with Groq."""
+    if not context.args:
+        await update.message.reply_text(
+            "❓ <b>Cara Penggunaan:</b>\n"
+            "<code>/ask [pertanyaan/ide]</code>\n\n"
+            "Contoh:\n"
+            "<code>/ask Berikan 5 ide konten YouTube Shorts tentang kucing lucu yang viral</code>",
+            parse_mode="HTML"
+        )
+        return
+        
+    prompt = " ".join(context.args)
+    
+    wait_msg = await update.message.reply_text("🧠 <i>Groq sedang berpikir...</i>", parse_mode="HTML")
+    
+    try:
+        from groq_metadata import ask_groq
+        response = ask_groq(prompt)
+        
+        # Save prompt and response in context for callback
+        context.user_data["last_ask_prompt"] = prompt
+        context.user_data["last_ask_response"] = response
+        
+        keyboard = [
+            [InlineKeyboardButton("💾 Simpan ke Sheet 'Ideas'", callback_data="save_idea")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if len(response) > 4000:
+            await wait_msg.delete()
+            # Send chunks, but only add keyboard to the last chunk
+            for x in range(0, len(response), 4000):
+                chunk = response[x:x+4000]
+                if x + 4000 >= len(response):
+                    await update.message.reply_text(chunk, reply_markup=reply_markup)
+                else:
+                    await update.message.reply_text(chunk)
+        else:
+            await wait_msg.edit_text(response, parse_mode="HTML", reply_markup=reply_markup)
+            
+    except Exception as e:
+        logger.error(f"Error in /ask command: {e}")
+        await wait_msg.edit_text(f"❌ Terjadi kesalahan: {e}", parse_mode="HTML")
+
+async def ask_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle callback from /ask inline keyboard."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "save_idea":
+        prompt = context.user_data.get("last_ask_prompt")
+        response = context.user_data.get("last_ask_response")
+        
+        if not prompt or not response:
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text("⚠️ Data ide sudah kedaluwarsa, silakan buat ide baru.")
+            return
+            
+        try:
+            sheets = get_sheets()
+            sheets.save_idea(prompt, response)
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text("✅ Ide berhasil disimpan ke tab <b>Ideas</b> di Google Sheets!", parse_mode="HTML")
+        except Exception as e:
+            await query.message.reply_text(f"❌ Gagal menyimpan ide: {e}")
 
 
 async def cmd_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -202,6 +294,7 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(err, parse_mode="HTML")
         return
     try:
+        sched = get_scheduler()
         sheets = get_sheets()
         scheduled = sheets.get_scheduled_videos()
         pending = sheets.get_pending_videos()
@@ -212,8 +305,26 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("📭 Tidak ada video dalam antrian.")
             return
 
+        # Calculate estimated times
+        now = datetime.now(WIB)
+        current_minutes = now.hour * 60 + now.minute
+        schedule_minutes = sorted(
+            [int(t.split(":")[0]) * 60 + int(t.split(":")[1]) for t in config.UPLOAD_SCHEDULE_HOURS]
+        )
+        
+        summary = sheets.get_queue_summary()
+        remaining_today = summary['remaining_today']
+        
+        # Find next available slot index today
+        next_slot_idx = 0
+        for i, m in enumerate(schedule_minutes):
+            if m > current_minutes:
+                next_slot_idx = i
+                break
+                
         msg = "📋 <b>Antrian Upload:</b>\n\n"
-        for i, v in enumerate(videos[:20], 1):
+        
+        for i, v in enumerate(videos[:20]):
             status_icon = {
                 "pending": "⏳",
                 "scheduled": "📅",
@@ -225,7 +336,29 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
             import html
             title = html.escape(v.get("title") or v["filename"])
             ch = html.escape(v.get("channel", config.DEFAULT_CHANNEL))
-            msg += f"{i}. {status_icon} <code>{title}</code> \u2192 {ch}\n"
+            
+            # Estimate time
+            if v["status"] in ("pending", "scheduled"):
+                if i < remaining_today:
+                    # Uploads today
+                    slot_idx = (next_slot_idx + i) % len(schedule_minutes)
+                    slot_min = schedule_minutes[slot_idx]
+                    time_str = f"{slot_min // 60:02d}:{slot_min % 60:02d} WIB"
+                    est = f" (Hari ini {time_str})"
+                else:
+                    # Uploads tomorrow or later
+                    days_ahead = (i - remaining_today) // len(schedule_minutes) + 1
+                    slot_idx = (i - remaining_today) % len(schedule_minutes)
+                    slot_min = schedule_minutes[slot_idx]
+                    time_str = f"{slot_min // 60:02d}:{slot_min % 60:02d} WIB"
+                    if days_ahead == 1:
+                        est = f" (Besok {time_str})"
+                    else:
+                        est = f" (H+{days_ahead} {time_str})"
+            else:
+                est = ""
+
+            msg += f"{i+1}. {status_icon} <code>{title}</code> \u2192 {ch}{est}\n"
 
         msg += f"\n📊 Total: {len(videos)} video"
         await update.message.reply_text(msg, parse_mode="HTML")
@@ -308,18 +441,20 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # File size info
     size_mb = (file_size or 0) / (1024 * 1024)
 
+    import html
+    fname_esc = html.escape(file_name)
     await message.reply_text(
-        f"📥 **Menerima video:**\n"
-        f"📄 `{file_name}`\n"
+        f"📥 <b>Menerima video:</b>\n"
+        f"📄 <code>{fname_esc}</code>\n"
         f"📏 {size_mb:.1f} MB\n\n"
         f"⏳ Mengunduh dari Telegram...",
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
 
     # Check Google config before proceeding
     err = _google_not_configured()
     if err:
-        await message.reply_text(err, parse_mode="Markdown")
+        await message.reply_text(err, parse_mode="HTML")
         return
 
     try:
@@ -384,14 +519,19 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Video dijadwalkan untuk: {tomorrow}"
             )
 
+        import html
+        fname_esc = html.escape(file_name)
+        title_esc = html.escape(metadata['title'])
+        tags_esc = html.escape(metadata['tags'])
+        
         await message.reply_text(
-            f"✅ **Pipeline selesai!**\n\n"
-            f"📄 File: `{file_name}`\n"
-            f"📝 Title: {metadata['title']}\n"
-            f"🏷️ Tags: {metadata['tags']}\n\n"
+            f"✅ <b>Pipeline selesai!</b>\n\n"
+            f"📄 File: <code>{fname_esc}</code>\n"
+            f"📝 Title: {title_esc}\n"
+            f"🏷️ Tags: {tags_esc}\n\n"
             f"{status_msg}\n\n"
             f"💡 Kamu bisa edit metadata di Google Sheets sebelum upload.",
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
 
     except Exception as e:
@@ -441,28 +581,47 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check Google config
     err = _google_not_configured()
     if err:
-        await message.reply_text(err, parse_mode="Markdown")
+        await message.reply_text(err, parse_mode="HTML")
         return
 
+    import html
+    url_esc = html.escape(url)
     await message.reply_text(
-        f"🔗 **Link detected!**\n"
-        f"`{url}`\n\n"
+        f"🔗 <b>Link detected!</b>\n"
+        f"<code>{url_esc}</code>\n\n"
         f"⏳ Downloading video via yt-dlp...",
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
 
     local_path = None
     try:
         import yt_dlp
 
-        # yt-dlp options: best quality, mp4 format
+        # yt-dlp options: best quality, mp4 format, bypass Android client
         ydl_opts = {
             'format': 'best[ext=mp4]/best',
             'outtmpl': str(config.TEMP_DIR / '%(title)s.%(ext)s'),
             'quiet': True,
             'no_warnings': True,
             'max_filesize': 500 * 1024 * 1024,  # 500 MB max
+            'extractor_args': {
+                'youtube': [
+                    'player_client=android,ios',
+                    'player_skip=configs,webpage'
+                ]
+            },
         }
+
+        # Check for cookies file to bypass YouTube's datacenter block
+        cookies_paths = [
+            "www.youtube.com_cookies.txt",  # Local
+            "/etc/secrets/www.youtube.com_cookies.txt"  # Render Secret File
+        ]
+        for cp in cookies_paths:
+            if os.path.exists(cp):
+                ydl_opts['cookiefile'] = cp
+                logger.info(f"Using yt-dlp cookies file: {cp}")
+                break
 
         # Download
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -483,12 +642,14 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mins, secs = divmod(int(duration), 60)
             duration_str = f"\n⏱️ Duration: {mins}:{secs:02d}"
 
+        import html
+        v_title_esc = html.escape(video_title)
         await message.reply_text(
-            f"✅ **Download selesai!**\n"
-            f"🎬 `{video_title}`\n"
+            f"✅ <b>Download selesai!</b>\n"
+            f"🎬 <code>{v_title_esc}</code>\n"
             f"📏 {size_mb:.1f} MB{duration_str}\n\n"
             f"📁 Uploading ke Google Drive...",
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
 
         # Continue pipeline: Drive → Sheets → Groq
@@ -586,14 +747,16 @@ async def scheduled_upload_job(context: ContextTypes.DEFAULT_TYPE):
 
         for r in results:
             if r["success"]:
+                import html
+                fname_esc = html.escape(r['filename'])
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=(
-                        f"✅ **Auto-uploaded!**\n"
-                        f"📹 `{r['filename']}`\n"
+                        f"✅ <b>Auto-uploaded!</b>\n"
+                        f"📹 <code>{fname_esc}</code>\n"
                         f"🔗 {r['youtube_link']}"
                     ),
-                    parse_mode="Markdown",
+                    parse_mode="HTML",
                 )
             else:
                 await context.bot.send_message(
@@ -685,6 +848,8 @@ def main():
     app.add_handler(CommandHandler("queue", cmd_queue))
     app.add_handler(CommandHandler("upload", cmd_upload))
     app.add_handler(CommandHandler("channel", cmd_channel))
+    app.add_handler(CommandHandler("ask", cmd_ask))
+    app.add_handler(CallbackQueryHandler(ask_callback, pattern="^save_idea$"))
 
     # Video / file handler
     app.add_handler(

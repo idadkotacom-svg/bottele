@@ -20,41 +20,74 @@ SCOPES = [
 # Timezone WIB (UTC+7)
 WIB = timezone(timedelta(hours=7))
 
-# Header row for new sheets
-HEADERS = [
-    "timestamp",
-    "filename",
-    "drive_link",
-    "title",
-    "description",
-    "tags",
-    "status",
-    "youtube_link",
-    "scheduled_date",
-    "channel",
-]
-
-
 class SheetsManager:
     """Manages Google Sheets for video upload queue and logging."""
 
     def __init__(self):
-        creds = Credentials.from_service_account_file(
+        self.sheet = None
+        self.ideas_sheet = None
+        self._init_sheet()
+
+    def _get_credentials(self):
+        """Helper to get Google service account credentials."""
+        return Credentials.from_service_account_file(
             config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=SCOPES
         )
-        self.client = gspread.authorize(creds)
-        self.sheet = self.client.open_by_key(config.GOOGLE_SHEET_ID).sheet1
-        self._ensure_headers()
 
-    def _ensure_headers(self):
-        """Make sure the header row exists."""
+    def _init_sheet(self):
+        """Initialize connection to Google Sheets and ensure both sheets exist."""
         try:
-            first_row = self.sheet.row_values(1)
-            if not first_row or first_row[0] != "timestamp":
-                self.sheet.insert_row(HEADERS, index=1)
-                logger.info("Headers added to sheet.")
+            creds = self._get_credentials()
+            client = gspread.authorize(creds)
+            spreadsheet = client.open_by_key(config.GOOGLE_SHEET_ID)
+
+            # Get or create Main queue sheet
+            try:
+                self.sheet = spreadsheet.worksheet("Queue")
+            except gspread.exceptions.WorksheetNotFound:
+                logger.info("Sheet 'Queue' not found, creating it...")
+                self.sheet = spreadsheet.add_worksheet("Queue", 1000, 10)
+                
+            # Get or create Ideas sheet
+            try:
+                self.ideas_sheet = spreadsheet.worksheet("Ideas")
+            except gspread.exceptions.WorksheetNotFound:
+                logger.info("Sheet 'Ideas' not found, creating it...")
+                self.ideas_sheet = spreadsheet.add_worksheet("Ideas", 1000, 4)
+
+            self._ensure_headers_exist()
+            logger.info("Connected to Google Sheets successfully.")
         except Exception as e:
-            logger.warning(f"Could not check headers: {e}")
+            logger.error(f"Failed to initialize Google Sheets: {e}")
+            raise
+
+    def _ensure_headers_exist(self):
+        """Add headers to both sheets if they are empty."""
+        # Setup Queue Sheet
+        if not self.sheet.get_all_values():
+            headers = [
+                "Timestamp",
+                "Filename",
+                "Drive Link",
+                "Title",
+                "Description",
+                "Tags",
+                "Status",
+                "YouTube Link",
+                "Scheduled Date",
+                "Channel",
+            ]
+            self.sheet.append_row(headers)
+            
+        # Setup Ideas Sheet
+        if not self.ideas_sheet.get_all_values():
+            headers = [
+                "Timestamp",
+                "Prompt",
+                "Generated Idea",
+                "Status/Notes"
+            ]
+            self.ideas_sheet.append_row(headers)
 
     def add_video(
         self, filename: str, drive_link: str, channel: str = "", status: str = "pending"

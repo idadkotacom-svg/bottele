@@ -3,10 +3,14 @@ Configuration module — loads environment variables and defines constants.
 """
 import os
 from pathlib import Path
+from datetime import timezone, timedelta
 from dotenv import load_dotenv
 
 # Load .env file
 load_dotenv()
+
+# Timezone WIB (UTC+7)
+WIB = timezone(timedelta(hours=7))
 
 # === Paths ===
 BASE_DIR = Path(__file__).parent
