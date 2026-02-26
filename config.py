@@ -76,7 +76,8 @@ FB_PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN", "")
 FB_PAGE_ID = os.getenv("FB_PAGE_ID", "")
 
 # === Scheduler ===
-MAX_UPLOADS_PER_DAY = int(os.getenv("MAX_UPLOADS_PER_DAY", "3"))
+MAX_UPLOADS_PER_DAY_YOUTUBE = int(os.getenv("MAX_UPLOADS_PER_DAY_YOUTUBE", "6"))
+MAX_UPLOADS_PER_DAY_FACEBOOK = int(os.getenv("MAX_UPLOADS_PER_DAY_FACEBOOK", "3"))
 SCHEDULER_INTERVAL_MINUTES = int(os.getenv("SCHEDULER_INTERVAL_MINUTES", "5"))
 
 # === Upload Schedule (Viral Hours WIB) ===

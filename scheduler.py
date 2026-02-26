@@ -126,11 +126,17 @@ class Scheduler:
         tomorrow = (datetime.now(WIB) + timedelta(days=1)).strftime("%Y-%m-%d")
 
         uploads_today = self.sheets.count_uploads_today(platform=platform)
-        remaining = config.MAX_UPLOADS_PER_DAY - uploads_today
+        
+        if platform == "youtube":
+            max_uploads = config.MAX_UPLOADS_PER_DAY_YOUTUBE
+        else:
+            max_uploads = config.MAX_UPLOADS_PER_DAY_FACEBOOK
+            
+        remaining = max_uploads - uploads_today
 
         logger.info(
             f"Queue check {platform} — Uploads today: {uploads_today}/"
-            f"{config.MAX_UPLOADS_PER_DAY}, Remaining: {remaining}"
+            f"{max_uploads}, Remaining: {remaining}"
         )
 
         if remaining <= 0:
@@ -149,9 +155,13 @@ class Scheduler:
 
         results = []
         
-        # If forced, try to process all remaining slots.
-        # If scheduled time, only process 1 video per slot.
-        limit = remaining if force else 1
+        # LIMIT:
+        # YouTube ignores upload time windows and processes all up to quota immediately.
+        # Facebook respects the upload time window unless forced.
+        if platform == "youtube":
+            limit = remaining
+        else:
+            limit = remaining if force else 1
         
         for video in to_process[:limit]:
             result = self._process_single(video, platform)
@@ -209,12 +219,34 @@ class Scheduler:
             video_link = ""
 
             if platform == "youtube":
+                # Calculate publish_at based on scheduled_date
+                scheduled_date_str = video.get("scheduled_date", "")
+                if not scheduled_date_str:
+                    scheduled_date_str = datetime.now(WIB).strftime("%Y-%m-%d")
+                    
+                slot_index = self.sheets.count_uploaded_for_date(scheduled_date_str, platform)
+                if slot_index >= len(config.UPLOAD_SCHEDULE_HOURS):
+                    slot_index = len(config.UPLOAD_SCHEDULE_HOURS) - 1
+                    
+                time_str = config.UPLOAD_SCHEDULE_HOURS[slot_index]
+                
+                # Combine date and time
+                publish_local = datetime.strptime(f"{scheduled_date_str} {time_str}", "%Y-%m-%d %H:%M")
+                publish_local = publish_local.replace(tzinfo=WIB)
+                
+                # YouTube API requires publishAt to be >= 15 minutes in the future
+                if publish_local <= datetime.now(WIB) + timedelta(minutes=15):
+                    publish_local = datetime.now(WIB) + timedelta(minutes=20)
+                    
+                publish_at_iso = publish_local.isoformat()
+                
                 yt = self._get_youtube(channel)
                 result = yt.upload(
                     file_path=local_path,
                     title=video["title"],
                     description=video.get("description", ""),
                     tags=video.get("tags", ""),
+                    publish_at=publish_at_iso
                 )
                 video_link = result["youtube_link"]
             elif platform == "facebook":
