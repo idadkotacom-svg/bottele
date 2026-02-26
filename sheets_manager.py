@@ -84,7 +84,6 @@ class SheetsManager:
                 "YouTube Link",
                 "Scheduled Date",
                 "Channel",
-                "Original URL",
             ]
             self.sheet.append_row(headers)
             
@@ -101,7 +100,6 @@ class SheetsManager:
                 "Facebook Link",
                 "Scheduled Date",
                 "Page",
-                "Original URL",
             ]
             self.fb_sheet.append_row(headers)
             
@@ -116,7 +114,7 @@ class SheetsManager:
             self.ideas_sheet.append_row(headers)
 
     def add_video(
-        self, filename: str, drive_link: str, channel: str = "", status: str = "pending", platform: str = "youtube", original_url: str = ""
+        self, filename: str, drive_link: str, channel: str = "", status: str = "pending", platform: str = "youtube"
     ) -> int:
         """
         Add a new video entry to the sheet.
@@ -144,7 +142,7 @@ class SheetsManager:
             scheduled_date = (now_dt + timedelta(days=1)).strftime("%Y-%m-%d")
             
         now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
-        row = [now_str, filename, drive_link, "", "", "", status, "", scheduled_date, channel, original_url]
+        row = [now_str, filename, drive_link, "", "", "", status, "", scheduled_date, channel]
         
         result = target_sheet.append_row(row, value_input_option="USER_ENTERED")
         
@@ -195,21 +193,6 @@ class SheetsManager:
         target_sheet = self.fb_sheet if platform == "facebook" else self.sheet
         target_sheet.update_cell(row, col["scheduled_date"], date_str)
         self.update_status(row, "scheduled", platform=platform)
-
-    def is_url_exists(self, url: str, platform: str = "youtube") -> bool:
-        """Check if the given original_url already exists in the queue."""
-        if not url:
-            return False
-            
-        target_sheet = self.fb_sheet if platform == "facebook" else self.sheet
-        all_rows = target_sheet.get_all_values()
-        
-        # Original URL is the 11th column (index 10)
-        for row in all_rows[1:]:
-            if len(row) >= 11 and row[10].strip() == url.strip():
-                return True
-                
-        return False
 
     def get_pending_videos(self, platform: str = "youtube") -> list[dict]:
         """
@@ -280,19 +263,6 @@ class SheetsManager:
         for row in all_rows[1:]:
             if len(row) >= 7 and row[6].strip().lower() == "uploaded":
                 if row[0].startswith(today):
-                    count += 1
-
-        return count
-
-    def count_uploaded_for_date(self, date_str: str, platform: str = "youtube") -> int:
-        """Count how many videos have been uploaded/uploading for a specific scheduled date."""
-        target_sheet = self.fb_sheet if platform == "facebook" else self.sheet
-        all_rows = target_sheet.get_all_values()
-        count = 0
-
-        for row in all_rows[1:]:
-            if len(row) >= 9 and row[6].strip().lower() in ["uploaded", "uploading"]:
-                if row[8].strip() == date_str:
                     count += 1
 
         return count

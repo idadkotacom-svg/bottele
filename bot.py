@@ -599,8 +599,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             filename=file_name,
             drive_link=drive_result["web_view_link"],
             channel=active_ch,
-            platform=active_platform,
-            original_url=""
+            platform=active_platform
         )
 
         # Step 4: Generate metadata via Groq
@@ -702,27 +701,11 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text(err, parse_mode="HTML")
         return
 
-    user_id = update.effective_user.id
-    active_ch = _get_active_channel(user_id)
-    active_platform = _get_active_platform(user_id)
-    sheets = get_sheets()
-
     for match in matches:
         url = match.group(0)
 
         import html
         url_esc = html.escape(url)
-
-        # Duplicate Check
-        if sheets.is_url_exists(url, platform=active_platform):
-            await message.reply_text(
-                f"⚠️ <b>Link sudah pernah diproses!</b>\n"
-                f"<code>{url_esc}</code>\n"
-                f"Bot akan melewatkan link ini untuk mencegah duplikat.",
-                parse_mode="HTML"
-            )
-            continue
-
         await message.reply_text(
             f"🔗 <b>Link detected!</b>\n"
             f"<code>{url_esc}</code>\n\n"
@@ -820,8 +803,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 filename=file_name,
                 drive_link=drive_result["web_view_link"],
                 channel=active_ch,
-                platform=active_platform,
-                original_url=url
+                platform=active_platform
             )
 
             # Form rich context for Groq AI to avoid hallucination

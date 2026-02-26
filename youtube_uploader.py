@@ -80,7 +80,6 @@ class YouTubeUploader:
         tags: str = "",
         category: str = None,
         privacy: str = None,
-        publish_at: str = None,
     ) -> dict:
         """
         Upload a video to YouTube.
@@ -107,10 +106,6 @@ class YouTubeUploader:
                 "selfDeclaredMadeForKids": False,
             },
         }
-
-        if publish_at:
-            body["status"]["privacyStatus"] = "private"
-            body["status"]["publishAt"] = publish_at
 
         media = MediaFileUpload(
             file_path,
