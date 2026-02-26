@@ -237,7 +237,7 @@ class SheetsManager:
 
         for i, row in enumerate(all_rows[1:], start=2):
             if len(row) >= 9 and row[6].strip().lower() == "scheduled":
-                if row[8].strip() == date_str:
+                if date_str == "all" or row[8].strip() == date_str:
                     scheduled.append({
                         "row": i,
                         "timestamp": row[0],

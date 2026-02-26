@@ -340,10 +340,14 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         sched = get_scheduler()
         sheets = get_sheets()
-        scheduled = sheets.get_scheduled_videos()
-        pending = sheets.get_pending_videos()
+        
+        # Get all videos from both platforms
+        yt_scheduled = sheets.get_scheduled_videos("all", platform="youtube")
+        yt_pending = sheets.get_pending_videos(platform="youtube")
+        fb_scheduled = sheets.get_scheduled_videos("all", platform="facebook")
+        fb_pending = sheets.get_pending_videos(platform="facebook")
 
-        videos = scheduled + pending
+        videos = yt_scheduled + yt_pending + fb_scheduled + fb_pending
 
         if not videos:
             await update.message.reply_text("📭 Tidak ada video dalam antrian.")
@@ -356,19 +360,36 @@ async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [int(t.split(":")[0]) * 60 + int(t.split(":")[1]) for t in config.UPLOAD_SCHEDULE_HOURS]
         )
         
-        summary = sheets.get_queue_summary()
-        remaining_today = summary['remaining_today']
+        yt_summary = sheets.get_queue_summary(platform="youtube")
+        fb_summary = sheets.get_queue_summary(platform="facebook")
         
-        # Find next available slot index today
-        next_slot_idx = 0
+        # Sort videos: pending first (FIFO), then scheduled by date
+        def sort_key(v):
+            status_order = {"uploading": 0, "pending": 1, "scheduled": 2}.get(v["status"], 3)
+            date_str = v.get("scheduled_date", "9999-12-31")
+            return (status_order, date_str, v["row"])
+            
+        videos.sort(key=sort_key)
+        
+        # Setup counters for today's quota
+        yt_remaining = yt_summary['remaining_today']
+        fb_remaining = fb_summary['remaining_today']
+        yt_next_slot = 0
+        fb_next_slot = 0
+        
         for i, m in enumerate(schedule_minutes):
             if m > current_minutes:
-                next_slot_idx = i
+                yt_next_slot = i
+                fb_next_slot = i
                 break
                 
         msg = "📋 <b>Antrian Upload:</b>\n\n"
         
-        for i, v in enumerate(videos[:20]):
+        yt_i, fb_i = 0, 0
+        
+        for i, v in enumerate(videos[:30]): # Show up to 30 items
+            platform_icon = "📺" if "youtube_link" in v else "📘"
+            platform = "youtube" if "youtube_link" in v else "facebook"
             status_icon = {
                 "pending": "⏳",
                 "scheduled": "📅",

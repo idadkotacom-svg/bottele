@@ -126,11 +126,12 @@ class Scheduler:
         tomorrow = (datetime.now(WIB) + timedelta(days=1)).strftime("%Y-%m-%d")
 
         uploads_today = self.sheets.count_uploads_today(platform=platform)
-        remaining = config.MAX_UPLOADS_PER_DAY - uploads_today
+        max_uploads = config.MAX_UPLOADS_PER_DAY_FACEBOOK if platform == "facebook" else config.MAX_UPLOADS_PER_DAY_YOUTUBE
+        remaining = max_uploads - uploads_today
 
         logger.info(
             f"Queue check {platform} — Uploads today: {uploads_today}/"
-            f"{config.MAX_UPLOADS_PER_DAY}, Remaining: {remaining}"
+            f"{max_uploads}, Remaining: {remaining}"
         )
 
         if remaining <= 0:
