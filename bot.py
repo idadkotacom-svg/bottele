@@ -552,7 +552,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 URL_PATTERN = re.compile(
     r'(https?://(?:www\.)?'
     r'(?:youtube\.com/(?:watch|shorts)|youtu\.be/|'
-    r'tiktok\.com/|vm\.tiktok\.com/|'
+    r'tiktok\.com/|vm\.tiktok\.com/|vt\.tiktok\.com/|'
     r'instagram\.com/(?:reel|p)/|'
     r'twitter\.com/.+/status/|x\.com/.+/status/|'
     r'facebook\.com/.+/videos/|'
@@ -572,11 +572,9 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = message.text or ""
 
     # Extract URL from message
-    match = URL_PATTERN.search(text)
-    if not match:
+    matches = list(URL_PATTERN.finditer(text))
+    if not matches:
         return  # Not a supported video URL
-
-    url = match.group(0)
 
     # Check Google config
     err = _google_not_configured()
@@ -584,151 +582,172 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text(err, parse_mode="HTML")
         return
 
-    import html
-    url_esc = html.escape(url)
-    await message.reply_text(
-        f"🔗 <b>Link detected!</b>\n"
-        f"<code>{url_esc}</code>\n\n"
-        f"⏳ Downloading video via yt-dlp...",
-        parse_mode="HTML",
-    )
+    for match in matches:
+        url = match.group(0)
 
-    local_path = None
-    try:
-        import yt_dlp
+        import html
+        url_esc = html.escape(url)
+        await message.reply_text(
+            f"🔗 <b>Link detected!</b>\n"
+            f"<code>{url_esc}</code>\n\n"
+            f"⏳ Downloading video via yt-dlp...",
+            parse_mode="HTML",
+        )
 
-        # yt-dlp options: best quality, mp4 format, bypass Android client
-        ydl_opts = {
-            'format': 'best[ext=mp4]/best',
-            'outtmpl': str(config.TEMP_DIR / '%(title)s.%(ext)s'),
-            'quiet': True,
-            'no_warnings': True,
-            'max_filesize': 500 * 1024 * 1024,  # 500 MB max
-            'extractor_args': {
-                'youtube': [
-                    'player_client=android,ios',
-                    'player_skip=configs,webpage'
-                ]
-            },
-        }
+        local_path = None
+        try:
+            import yt_dlp
 
-        # Check for cookies file to bypass YouTube's datacenter block
-        cookies_paths = [
-            "www.youtube.com_cookies.txt",  # Local
-            "/etc/secrets/www.youtube.com_cookies.txt"  # Render Secret File
-        ]
-        for cp in cookies_paths:
-            if os.path.exists(cp):
-                ydl_opts['cookiefile'] = cp
-                logger.info(f"Using yt-dlp cookies file: {cp}")
-                break
+            # yt-dlp options: best quality, mp4 format, bypass Android client
+            ydl_opts = {
+                'format': 'bestvideo+bestaudio/best',
+                'merge_output_format': 'mp4',
+                'outtmpl': str(config.TEMP_DIR / '%(title)s.%(ext)s'),
+                'quiet': True,
+                'no_warnings': True,
+                'max_filesize': 500 * 1024 * 1024,  # 500 MB max
+                'extractor_args': {
+                    'youtube': [
+                        'player_client=android,ios',
+                        'player_skip=configs,webpage'
+                    ]
+                },
+            }
 
-        # Download
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            local_path = ydl.prepare_filename(info)
+            # Check for cookies file to bypass YouTube's datacenter block
+            cookies_paths = [
+                "www.youtube.com_cookies.txt",  # Local
+                "/etc/secrets/www.youtube.com_cookies.txt"  # Render Secret File
+            ]
+            for cp in cookies_paths:
+                if os.path.exists(cp):
+                    ydl_opts['cookiefile'] = cp
+                    logger.info(f"Using yt-dlp cookies file: {cp}")
+                    break
+
+            # Download using asyncio.to_thread to prevent blocking main thread
+            def _download_video():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info_dict = ydl.extract_info(url, download=True)
+                    download_path = ydl.prepare_filename(info_dict)
+                    return info_dict, download_path
+
+            info, local_path = await asyncio.to_thread(_download_video)
+
+            if not os.path.exists(local_path):
+                await message.reply_text("❌ Download gagal — file tidak ditemukan.")
+                continue
+
             video_title = info.get('title', 'video')
+            video_desc = info.get('description', '')
+            video_tags = info.get('tags', [])
             duration = info.get('duration', 0)
 
-        if not os.path.exists(local_path):
-            await message.reply_text("❌ Download gagal — file tidak ditemukan.")
-            return
+            file_name = os.path.basename(local_path)
+            size_mb = os.path.getsize(local_path) / (1024 * 1024)
 
-        file_name = os.path.basename(local_path)
-        size_mb = os.path.getsize(local_path) / (1024 * 1024)
+            duration_str = ""
+            if duration:
+                mins, secs = divmod(int(duration), 60)
+                duration_str = f"\n⏱️ Duration: {mins}:{secs:02d}"
 
-        duration_str = ""
-        if duration:
-            mins, secs = divmod(int(duration), 60)
-            duration_str = f"\n⏱️ Duration: {mins}:{secs:02d}"
-
-        import html
-        v_title_esc = html.escape(video_title)
-        await message.reply_text(
-            f"✅ <b>Download selesai!</b>\n"
-            f"🎬 <code>{v_title_esc}</code>\n"
-            f"📏 {size_mb:.1f} MB{duration_str}\n\n"
-            f"📁 Uploading ke Google Drive...",
-            parse_mode="HTML",
-        )
-
-        # Continue pipeline: Drive → Sheets → Groq
-        drive_result = get_drive().upload(local_path)
-        await message.reply_text(
-            f"✅ Uploaded ke Drive!\n"
-            f"🔗 {drive_result['web_view_link']}\n\n"
-            f"🧠 Generating metadata via Groq AI...",
-        )
-
-        active_ch = _get_active_channel(update.effective_user.id)
-        sheets = get_sheets()
-        row = sheets.add_video(
-            filename=file_name,
-            drive_link=drive_result["web_view_link"],
-            channel=active_ch,
-        )
-
-        # Use original video title as context for Groq
-        from groq_metadata import generate_metadata
-        extra = message.caption or ""
-        metadata = generate_metadata(
-            file_name, extra_context=f"Original title: {video_title}. {extra}"
-        )
-        sheets.update_metadata(
-            row,
-            metadata["title"],
-            metadata["description"],
-            metadata["tags"],
-        )
-
-        # Clean up temp
-        try:
-            if os.path.exists(local_path):
-                os.remove(local_path)
-        except PermissionError:
-            pass
-
-        # Status
-        summary = sheets.get_queue_summary()
-        sched = get_scheduler()
-        next_time = sched.get_next_upload_time()
-
-        if summary["remaining_today"] > 0:
-            status_msg = (
-                f"📺 Video dijadwalkan upload di <code>{next_time}</code>\n"
-                f"Atau ketik /upload untuk force upload sekarang.\n"
-                f"📊 Sisa slot hari ini: {summary['remaining_today']}"
-            )
-        else:
-            status_msg = (
-                f"📅 Limit harian tercapai!\n"
-                f"Video dijadwalkan untuk besok."
+            v_title_esc = html.escape(video_title)
+            await message.reply_text(
+                f"✅ <b>Download selesai!</b>\n"
+                f"🎬 <code>{v_title_esc}</code>\n"
+                f"📏 {size_mb:.1f} MB{duration_str}\n\n"
+                f"📁 Uploading ke Google Drive...",
+                parse_mode="HTML",
             )
 
-        # Step 5: Notify user via Telegram
-        import html
-        fname = html.escape(file_name)
-        title_esc = html.escape(metadata["title"])
-        tags_esc = html.escape(metadata["tags"])
-        
-        await update.message.reply_text(
-            f"✅ <b>Pipeline selesai!</b>\n\n"
-            f"📄 File: <code>{fname}</code>\n"
-            f"📝 Title: {title_esc}\n"
-            f"🏷️ Tags: {tags_esc}\n\n"
-            f"{status_msg}\n\n"
-            f"💡 Kamu bisa edit metadata di Google Sheets sebelum upload.",
-            parse_mode="HTML",
-        )
+            # Continue pipeline: Drive → Sheets → Groq
+            drive_result = get_drive().upload(local_path)
+            await message.reply_text(
+                f"✅ Uploaded ke Drive!\n"
+                f"🔗 {drive_result['web_view_link']}\n\n"
+                f"🧠 Generating metadata via Groq AI...",
+            )
 
-    except Exception as e:
-        logger.error(f"Error processing URL: {e}", exc_info=True)
-        await message.reply_text(f"❌ Error: {e}")
-        try:
-            if local_path and os.path.exists(local_path):
-                os.remove(local_path)
-        except (PermissionError, Exception):
-            pass
+            active_ch = _get_active_channel(update.effective_user.id)
+            sheets = get_sheets()
+            row = sheets.add_video(
+                filename=file_name,
+                drive_link=drive_result["web_view_link"],
+                channel=active_ch,
+            )
+
+            # Form rich context for Groq AI to avoid hallucination
+            context_parts = [f"Original title: {video_title}"]
+            if extra:
+                context_parts.append(f"User caption: {extra}")
+            if video_desc:
+                # Limit description to 1000 chars to avoid token Bloat
+                context_parts.append(f"Original description: {video_desc[:1000]}")
+            if video_tags:
+                tags_str = ", ".join(video_tags[:20]) # Limit to first 20 tags
+                context_parts.append(f"Original tags: {tags_str}")
+                
+            rich_context = "\n".join(context_parts)
+
+            # Use original rich context for Groq
+            from groq_metadata import generate_metadata
+            metadata = generate_metadata(
+                file_name, extra_context=rich_context
+            )
+            sheets.update_metadata(
+                row,
+                metadata["title"],
+                metadata["description"],
+                metadata["tags"],
+            )
+
+            # Clean up temp
+            try:
+                if os.path.exists(local_path):
+                    os.remove(local_path)
+            except PermissionError:
+                pass
+
+            # Status
+            summary = sheets.get_queue_summary()
+            sched = get_scheduler()
+            next_time = sched.get_next_upload_time()
+
+            if summary["remaining_today"] > 0:
+                status_msg = (
+                    f"📺 Video dijadwalkan upload di <code>{next_time}</code>\n"
+                    f"Atau ketik /upload untuk force upload sekarang.\n"
+                    f"📊 Sisa slot hari ini: {summary['remaining_today']}"
+                )
+            else:
+                status_msg = (
+                    f"📅 Limit harian tercapai!\n"
+                    f"Video dijadwalkan untuk besok."
+                )
+
+            # Step 5: Notify user via Telegram
+            fname = html.escape(file_name)
+            title_esc = html.escape(metadata["title"])
+            tags_esc = html.escape(metadata["tags"])
+            
+            await message.reply_text(
+                f"✅ <b>Pipeline selesai!</b>\n\n"
+                f"📄 File: <code>{fname}</code>\n"
+                f"📝 Title: {title_esc}\n"
+                f"🏷️ Tags: {tags_esc}\n\n"
+                f"{status_msg}\n\n"
+                f"💡 Kamu bisa edit metadata di Google Sheets sebelum upload.",
+                parse_mode="HTML",
+            )
+
+        except Exception as e:
+            logger.error(f"Error processing URL: {e}", exc_info=True)
+            await message.reply_text(f"❌ Error for {url_esc}: {e}", parse_mode="HTML")
+            try:
+                if local_path and os.path.exists(local_path):
+                    os.remove(local_path)
+            except (PermissionError, Exception):
+                pass
 
 # ─── Scheduled Upload Job ──────────────────────────────────────────
 

@@ -48,13 +48,13 @@ class Scheduler:
                 h, m = map(int, time_str.split(":"))
                 scheduled_minutes = h * 60 + m
 
-                # Check if within ±5 minute window
+                # Check if within ±30 minute window to prevent stuck pending videos
                 diff = abs(current_minutes - scheduled_minutes)
                 # Handle midnight wrap (e.g., 23:58 vs 00:00)
                 if diff > 720:  # more than 12 hours
                     diff = 1440 - diff
 
-                if diff <= 5:
+                if diff <= 30:
                     return True
             except (ValueError, AttributeError):
                 continue

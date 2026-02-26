@@ -78,6 +78,7 @@ class SheetsManager:
                 "Channel",
             ]
             self.sheet.append_row(headers)
+            # Re-fetch after appending headers to avoid incorrect row parsing
             
         # Setup Ideas Sheet
         if not self.ideas_sheet.get_all_values():
@@ -102,8 +103,20 @@ class SheetsManager:
             channel = config.DEFAULT_CHANNEL
         now = datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S")
         row = [now, filename, drive_link, "", "", "", status, "", "", channel]
-        self.sheet.append_row(row, value_input_option="USER_ENTERED")
-        row_num = len(self.sheet.get_all_values())
+        result = self.sheet.append_row(row, value_input_option="USER_ENTERED")
+        
+        try:
+            # Extract exact row from 'updates.updatedRange' (e.g., "'Queue'!A11:J11")
+            updated_range = result.get("updates", {}).get("updatedRange", "")
+            import re
+            match = re.search(r'[A-Z]+(\d+)', updated_range)
+            if match:
+                row_num = int(match.group(1))
+            else:
+                row_num = len(self.sheet.get_all_values())
+        except Exception:
+            row_num = len(self.sheet.get_all_values())
+
         logger.info(f"Added video '{filename}' at row {row_num} (channel: {channel})")
         return row_num
 
