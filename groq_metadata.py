@@ -21,7 +21,7 @@ def generate_metadata(filename: str, extra_context: str = "") -> dict:
         extra_context: Optional additional context from the user.
 
     Returns:
-        dict with keys: title, description, tags
+        dict with keys: title(title must contain one or two viral tag and theme video), description, tags
     """
     client = Groq(api_key=config.GROQ_API_KEY)
 

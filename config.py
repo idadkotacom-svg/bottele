@@ -45,6 +45,7 @@ SHEET_COLUMNS = {
     "status": 7,
     "youtube_link": 8,
     "scheduled_date": 9,
+    "channel": 10,
 }
 
 # === YouTube ===
@@ -52,13 +53,29 @@ YOUTUBE_CLIENT_SECRETS_FILE = os.getenv(
     "YOUTUBE_CLIENT_SECRETS_FILE",
     str(CREDENTIALS_DIR / "client_secrets.json"),
 )
-YOUTUBE_TOKEN_FILE = str(CREDENTIALS_DIR / "youtube_token.json")
 YOUTUBE_CATEGORY = os.getenv("YOUTUBE_CATEGORY", "22")  # People & Blogs
 YOUTUBE_PRIVACY = os.getenv("YOUTUBE_PRIVACY", "public")
 
+# === YouTube Channels ===
+# Format: comma-separated channel names
+_channels_raw = os.getenv("YOUTUBE_CHANNELS", "default")
+YOUTUBE_CHANNELS = [c.strip() for c in _channels_raw.split(",")]
+DEFAULT_CHANNEL = YOUTUBE_CHANNELS[0]
+
+def get_channel_token_file(channel_name: str) -> str:
+    """Get the token file path for a specific channel."""
+    safe_name = channel_name.lower().replace(" ", "_")
+    return str(CREDENTIALS_DIR / f"youtube_token_{safe_name}.json")
+
 # === Scheduler ===
-MAX_UPLOADS_PER_DAY = int(os.getenv("MAX_UPLOADS_PER_DAY", "6"))
-SCHEDULER_INTERVAL_MINUTES = int(os.getenv("SCHEDULER_INTERVAL_MINUTES", "30"))
+MAX_UPLOADS_PER_DAY = int(os.getenv("MAX_UPLOADS_PER_DAY", "3"))
+SCHEDULER_INTERVAL_MINUTES = int(os.getenv("SCHEDULER_INTERVAL_MINUTES", "5"))
+
+# === Upload Schedule (Viral Hours WIB) ===
+# Default: 21:00, 00:00, 03:00 WIB — targeting US/EU peak hours
+# Format: comma-separated "HH:MM" in WIB
+_schedule_raw = os.getenv("UPLOAD_SCHEDULE_HOURS", "21:00,00:00,03:00")
+UPLOAD_SCHEDULE_HOURS = [s.strip() for s in _schedule_raw.split(",")]
 
 # === Groq Prompt Template ===
 METADATA_PROMPT_TEMPLATE = """You are a YouTube SEO expert. Given the video filename below, generate compelling metadata for a YouTube video.

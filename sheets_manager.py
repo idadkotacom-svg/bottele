@@ -31,6 +31,7 @@ HEADERS = [
     "status",
     "youtube_link",
     "scheduled_date",
+    "channel",
 ]
 
 
@@ -56,7 +57,7 @@ class SheetsManager:
             logger.warning(f"Could not check headers: {e}")
 
     def add_video(
-        self, filename: str, drive_link: str, status: str = "pending"
+        self, filename: str, drive_link: str, channel: str = "", status: str = "pending"
     ) -> int:
         """
         Add a new video entry to the sheet.
@@ -64,11 +65,13 @@ class SheetsManager:
         Returns:
             Row number of the new entry.
         """
+        if not channel:
+            channel = config.DEFAULT_CHANNEL
         now = datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S")
-        row = [now, filename, drive_link, "", "", "", status, "", ""]
+        row = [now, filename, drive_link, "", "", "", status, "", "", channel]
         self.sheet.append_row(row, value_input_option="USER_ENTERED")
         row_num = len(self.sheet.get_all_values())
-        logger.info(f"Added video '{filename}' at row {row_num}")
+        logger.info(f"Added video '{filename}' at row {row_num} (channel: {channel})")
         return row_num
 
     def update_metadata(
@@ -123,6 +126,7 @@ class SheetsManager:
                     "status": row[6],
                     "youtube_link": row[7] if len(row) > 7 else "",
                     "scheduled_date": row[8] if len(row) > 8 else "",
+                    "channel": row[9] if len(row) > 9 else config.DEFAULT_CHANNEL,
                 })
 
         return pending
@@ -152,6 +156,7 @@ class SheetsManager:
                         "status": row[6],
                         "youtube_link": row[7] if len(row) > 7 else "",
                         "scheduled_date": row[8],
+                        "channel": row[9] if len(row) > 9 else config.DEFAULT_CHANNEL,
                     })
 
         return scheduled

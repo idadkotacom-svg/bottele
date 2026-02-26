@@ -1,10 +1,9 @@
 """
 YouTube upload module — uploads videos to YouTube via Data API v3.
-Uses OAuth2 for authentication (required for YouTube uploads).
+Supports multiple channels with separate OAuth2 tokens.
 """
 import logging
 import os
-import json
 from pathlib import Path
 
 from google.oauth2.credentials import Credentials
@@ -23,35 +22,46 @@ SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 class YouTubeUploader:
     """Handles uploading videos to YouTube via the Data API v3."""
 
-    def __init__(self):
+    def __init__(self, channel_name: str = None):
+        """
+        Initialize uploader for a specific channel.
+
+        Args:
+            channel_name: Channel name (must match one in YOUTUBE_CHANNELS).
+                          If None, uses the default channel.
+        """
+        self.channel_name = channel_name or config.DEFAULT_CHANNEL
+        self.token_file = config.get_channel_token_file(self.channel_name)
         self.creds = self._authenticate()
         self.service = build("youtube", "v3", credentials=self.creds)
 
     def _authenticate(self) -> Credentials:
         """Authenticate with YouTube using OAuth2."""
         creds = None
-        token_file = config.YOUTUBE_TOKEN_FILE
 
         # Load existing token
-        if os.path.exists(token_file):
-            creds = Credentials.from_authorized_user_file(token_file, SCOPES)
+        if os.path.exists(self.token_file):
+            creds = Credentials.from_authorized_user_file(self.token_file, SCOPES)
 
         # Refresh or get new token
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
-                logger.info("Refreshing YouTube token...")
+                logger.info(f"Refreshing YouTube token for '{self.channel_name}'...")
                 creds.refresh(Request())
             else:
-                logger.info("Starting YouTube OAuth2 flow...")
+                logger.info(
+                    f"Starting YouTube OAuth2 flow for '{self.channel_name}'...\n"
+                    f"Please login with the Google account for channel: {self.channel_name}"
+                )
                 flow = InstalledAppFlow.from_client_secrets_file(
                     config.YOUTUBE_CLIENT_SECRETS_FILE, SCOPES
                 )
                 creds = flow.run_local_server(port=0)
 
             # Save token for future use
-            with open(token_file, "w") as f:
+            with open(self.token_file, "w") as f:
                 f.write(creds.to_json())
-            logger.info("YouTube token saved.")
+            logger.info(f"YouTube token saved for '{self.channel_name}'.")
 
         return creds
 
@@ -67,14 +77,6 @@ class YouTubeUploader:
         """
         Upload a video to YouTube.
 
-        Args:
-            file_path: Local path to the video file.
-            title: Video title.
-            description: Video description.
-            tags: Comma-separated tags string.
-            category: YouTube category ID (default from config).
-            privacy: Privacy status (public/private/unlisted).
-
         Returns:
             dict with keys: video_id, youtube_link
         """
@@ -83,12 +85,11 @@ class YouTubeUploader:
         if privacy is None:
             privacy = config.YOUTUBE_PRIVACY
 
-        # Parse tags
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
 
         body = {
             "snippet": {
-                "title": title[:100],  # YouTube limit
+                "title": title[:100],
                 "description": description[:5000],
                 "tags": tag_list,
                 "categoryId": category,
@@ -103,10 +104,10 @@ class YouTubeUploader:
             file_path,
             mimetype="video/mp4",
             resumable=True,
-            chunksize=10 * 1024 * 1024,  # 10 MB chunks
+            chunksize=10 * 1024 * 1024,
         )
 
-        logger.info(f"Uploading to YouTube: '{title}'...")
+        logger.info(f"Uploading to YouTube ({self.channel_name}): '{title}'...")
 
         request = self.service.videos().insert(
             part="snippet,status",
@@ -124,7 +125,7 @@ class YouTubeUploader:
         video_id = response["id"]
         youtube_link = f"https://youtu.be/{video_id}"
 
-        logger.info(f"Upload complete: {youtube_link}")
+        logger.info(f"Upload complete ({self.channel_name}): {youtube_link}")
 
         return {
             "video_id": video_id,

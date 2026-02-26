@@ -1,30 +1,60 @@
 """
 Google Drive upload module — uploads video files to a specified Drive folder.
-Uses a service account for authentication.
+Uses OAuth2 for authentication (same flow as YouTube).
 """
+import io
 import logging
+import os
 from pathlib import Path
 
-from google.oauth2.service_account import Credentials
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 import config
 
 logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+TOKEN_FILE = str(config.CREDENTIALS_DIR / "drive_token.json")
 
 
 class DriveUploader:
-    """Handles uploading files to Google Drive."""
+    """Handles uploading files to Google Drive via OAuth2."""
 
     def __init__(self):
-        creds = Credentials.from_service_account_file(
-            config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=SCOPES
-        )
-        self.service = build("drive", "v3", credentials=creds)
+        self.creds = self._authenticate()
+        self.service = build("drive", "v3", credentials=self.creds)
         self.folder_id = config.GOOGLE_DRIVE_FOLDER_ID
+
+    def _authenticate(self) -> Credentials:
+        """Authenticate with Google Drive using OAuth2."""
+        creds = None
+
+        # Load existing token
+        if os.path.exists(TOKEN_FILE):
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+
+        # Refresh or get new token
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                logger.info("Refreshing Drive token...")
+                creds.refresh(Request())
+            else:
+                logger.info("Starting Drive OAuth2 flow...")
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    config.YOUTUBE_CLIENT_SECRETS_FILE, SCOPES
+                )
+                creds = flow.run_local_server(port=0)
+
+            # Save token for future use
+            with open(TOKEN_FILE, "w") as f:
+                f.write(creds.to_json())
+            logger.info("Drive token saved.")
+
+        return creds
 
     def upload(self, file_path: str, mime_type: str = "video/mp4") -> dict:
         """
@@ -89,9 +119,6 @@ class DriveUploader:
         Returns:
             Local file path.
         """
-        from googleapiclient.http import MediaIoBaseDownload
-        import io
-
         request = self.service.files().get_media(fileId=file_id)
         fh = io.FileIO(destination, "wb")
         downloader = MediaIoBaseDownload(fh, request)
