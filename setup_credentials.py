@@ -7,7 +7,9 @@ import base64
 import json
 import os
 import sys
+import sys
 from pathlib import Path
+from dotenv import load_dotenv
 
 CREDENTIALS_DIR = Path(__file__).parent / "credentials"
 CREDENTIALS_DIR.mkdir(exist_ok=True)
@@ -32,7 +34,13 @@ def _get_channel_token_vars():
 
 
 def restore_credentials():
-    """Restore credential files from environment variables."""
+    """Restore credential files from environment variables or secret files."""
+    # Render mounts secret files at /etc/secrets/ or app root
+    for secret_path in ["/etc/secrets/render_env_vars.txt", "render_env_vars.txt"]:
+        if os.path.exists(secret_path):
+            load_dotenv(secret_path)
+            print(f"Loaded secrets from {secret_path}")
+
     all_creds = {**CREDENTIAL_FILES, **_get_channel_token_vars()}
     restored = 0
 
